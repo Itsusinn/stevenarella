@@ -1,6 +1,6 @@
 // Copyright 2016 Matthew Collins
 //
-// Licensed under the Apache License, Version 2.0 (the "License");
+// Licensed under the Apache License, Version 2.0 (the "&License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
@@ -12,42 +12,87 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use once_cell::sync::Lazy;
+use std::sync::Arc;
+use std::ops::Deref;
 #[cfg(not(target_arch = "wasm32"))]
 use serde_json::json;
 use sha1::{self, Digest};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AuthService {
+    // All requests to Yggdrasil are made to the following server:
+    auth_server: reqwest::Url,
+    session_server: reqwest::Url,
+}
+impl AuthService {
+    pub fn new(auth_server: reqwest::Url, session_server: reqwest::Url) -> Self {
+        Self {
+            auth_server,
+            session_server
+        }
+    }
+    pub fn join_url(&self) -> reqwest::Url {
+        self.session_server.join("session/minecraft/join").expect("Failed to slice join url")
+    }
+    pub fn login_url(&self) -> reqwest::Url {
+        self.auth_server.join("authenticate").expect("Failed to slice authenticate url")
+    }
+    pub fn refresh_url(&self) -> reqwest::Url {
+        self.auth_server.join("refresh").expect("Failed to slice refresh url")
+    }
+    pub fn validate_url(&self) -> reqwest::Url {
+        self.auth_server.join("validate").expect("Failed to slice validate url")
+    }
+}
+const MOJANG_AUTH: Lazy<Arc<AuthService>> = Lazy::new(|| {
+    Arc::new(AuthService {
+        session_server: reqwest::Url::parse("https://sessionserver.mojang.com/").unwrap(),
+        auth_server: reqwest::Url::parse("https://authserver.mojang.com/").unwrap()
+    })
+});
+#[test]
+fn test_auth_service() {
+    let auth_service = Arc::new(AuthService::new(
+        reqwest::Url::parse("https://auth-demo.yushi.moe/authserver/").unwrap(),
+        reqwest::Url::parse("https://auth-demo.yushi.moe/sessionserver/").unwrap()
+    ));
+    let profile = Profile::login_with_auth(
+        "test1@example.com",
+        "111111", uuid::Uuid::new_v4().as_u128().as_str(),
+        auth_service
+    );g
+}
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Profile {
     pub username: String,
     pub id: String,
     pub access_token: String,
+    pub service: Arc<AuthService>
 }
-
-const JOIN_URL: &str = "https://sessionserver.mojang.com/session/minecraft/join";
-const LOGIN_URL: &str = "https://authserver.mojang.com/authenticate";
-const REFRESH_URL: &str = "https://authserver.mojang.com/refresh";
-const VALIDATE_URL: &str = "https://authserver.mojang.com/validate";
 
 #[cfg(not(target_arch = "wasm32"))]
 impl Profile {
     pub fn login(username: &str, password: &str, token: &str) -> Result<Profile, super::Error> {
+        Self::login_with_auth(username, password, token, MOJANG_AUTH.deref().to_owned())
+    }
+    pub fn login_with_auth(username: &str, password: &str, token: &str, service: Arc<AuthService>) -> Result<Profile, super::Error>{
         let req_msg = json!({
-        "username": username,
-        "password": password,
-        "clientToken": token,
-        "agent": {
-            "name": "Minecraft",
-            "version": 1
+            "username": username,
+            "password": password,
+            "clientToken": token,
+            "agent": {
+                "name": "Minecraft",
+                "version": 1
         }});
         let req = serde_json::to_string(&req_msg)?;
 
         let client = reqwest::blocking::Client::new();
         let res = client
-            .post(LOGIN_URL)
+            .post(service.login_url())
             .header(reqwest::header::CONTENT_TYPE, "application/json")
             .body(req)
             .send()?;
-
         let ret: serde_json::Value = serde_json::from_reader(res)?;
         if let Some(error) = ret.get("error").and_then(|v| v.as_str()) {
             return Err(super::Error::Err(format!(
@@ -72,9 +117,9 @@ impl Profile {
                 .and_then(|v| v.as_str())
                 .unwrap()
                 .to_owned(),
+            service,
         })
     }
-
     pub fn refresh(self, token: &str) -> Result<Profile, super::Error> {
         let req_msg = json!({
         "accessToken": self.access_token,
@@ -84,7 +129,7 @@ impl Profile {
 
         let client = reqwest::blocking::Client::new();
         let res = client
-            .post(VALIDATE_URL)
+            .post(self.service.validate_url())
             .header(reqwest::header::CONTENT_TYPE, "application/json")
             .body(req)
             .send()?;
@@ -93,7 +138,7 @@ impl Profile {
             let req = serde_json::to_string(&req_msg)?; // TODO: fix parsing twice to avoid move
                                                         // Refresh needed
             let res = client
-                .post(REFRESH_URL)
+                .post(self.service.refresh_url())
                 .header(reqwest::header::CONTENT_TYPE, "application/json")
                 .body(req)
                 .send()?;
@@ -122,6 +167,7 @@ impl Profile {
                     .and_then(|v| v.as_str())
                     .unwrap()
                     .to_owned(),
+                service: self.service
             });
         }
         Ok(self)
@@ -166,7 +212,7 @@ impl Profile {
 
         let client = reqwest::blocking::Client::new();
         let res = client
-            .post(JOIN_URL)
+            .post(self.service.join_url())
             .header(reqwest::header::CONTENT_TYPE, "application/json")
             .body(join)
             .send()?;
