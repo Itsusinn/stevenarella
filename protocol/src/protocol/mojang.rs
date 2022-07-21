@@ -45,24 +45,16 @@ impl AuthService {
         self.auth_server.join("validate").expect("Failed to slice validate url")
     }
 }
-const MOJANG_AUTH: Lazy<Arc<AuthService>> = Lazy::new(|| {
-    Arc::new(AuthService {
-        session_server: reqwest::Url::parse("https://sessionserver.mojang.com/").unwrap(),
-        auth_server: reqwest::Url::parse("https://authserver.mojang.com/").unwrap()
-    })
-});
-#[test]
-fn test_auth_service() {
-    let auth_service = Arc::new(AuthService::new(
-        reqwest::Url::parse("https://auth-demo.yushi.moe/authserver/").unwrap(),
-        reqwest::Url::parse("https://auth-demo.yushi.moe/sessionserver/").unwrap()
-    ));
-    let profile = Profile::login_with_auth(
-        "test1@example.com",
-        "111111", uuid::Uuid::new_v4().as_u128().as_str(),
-        auth_service
-    );g
+impl Default for AuthService {
+    fn default() -> Self {
+        Self {
+            auth_server: reqwest::Url::parse("https://authserver.mojang.com/").unwrap(),
+            session_server: reqwest::Url::parse("https://sessionserver.mojang.com/").unwrap()
+        }
+    }
 }
+const MOJANG_AUTH: Lazy<Arc<AuthService>> = Lazy::new(|| { Arc::new(AuthService::default()) });
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Profile {
     pub username: String,
@@ -73,10 +65,18 @@ pub struct Profile {
 
 #[cfg(not(target_arch = "wasm32"))]
 impl Profile {
-    pub fn login(username: &str, password: &str, token: &str) -> Result<Profile, super::Error> {
-        Self::login_with_auth(username, password, token, MOJANG_AUTH.deref().to_owned())
+    pub fn offline(username: &str) -> Result<Profile, super::Error>  {
+        Ok(Self{
+            username: username.into(),
+            id: "".into(),
+            access_token: "".into(),
+            service: MOJANG_AUTH.deref().to_owned(),
+        })
     }
-    pub fn login_with_auth(username: &str, password: &str, token: &str, service: Arc<AuthService>) -> Result<Profile, super::Error>{
+    pub async fn login(username: &str, password: &str, token: &str) -> Result<Profile, super::Error> {
+        Self::login_with_auth(username, password, token, MOJANG_AUTH.deref().to_owned()).await
+    }
+    pub async fn login_with_auth(username: &str, password: &str, token: &str, service: Arc<AuthService>) -> Result<Profile, super::Error>{
         let req_msg = json!({
             "username": username,
             "password": password,
@@ -87,13 +87,14 @@ impl Profile {
         }});
         let req = serde_json::to_string(&req_msg)?;
 
-        let client = reqwest::blocking::Client::new();
+        let client = reqwest::Client::new();
         let res = client
             .post(service.login_url())
             .header(reqwest::header::CONTENT_TYPE, "application/json")
             .body(req)
-            .send()?;
-        let ret: serde_json::Value = serde_json::from_reader(res)?;
+            .send()
+            .await?;
+        let ret: serde_json::Value = res.json().await?;
         if let Some(error) = ret.get("error").and_then(|v| v.as_str()) {
             return Err(super::Error::Err(format!(
                 "{}: {}",
@@ -173,7 +174,7 @@ impl Profile {
         Ok(self)
     }
 
-    pub fn join_server(
+    pub async fn join_server(
         &self,
         server_id: &str,
         shared_key: &[u8],
@@ -210,12 +211,13 @@ impl Profile {
         });
         let join = serde_json::to_string(&join_msg).unwrap();
 
-        let client = reqwest::blocking::Client::new();
+        let client = reqwest::Client::new();
         let res = client
             .post(self.service.join_url())
             .header(reqwest::header::CONTENT_TYPE, "application/json")
             .body(join)
-            .send()?;
+            .send()
+            .await?;
 
         if res.status() == reqwest::StatusCode::NO_CONTENT {
             Ok(())

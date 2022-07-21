@@ -18,6 +18,9 @@ num-traits = "0.2.14"
 instant = "0.1.12"
 once_cell = "1.13.0"
 uuid = { version = "1.1.2",features = ["v4"] }
+eyre = "0.6.8"
+tokio = { version = "1.20.0", features = ["net"]}
+
 
 [dependencies.steven_shared]
 path = "../shared"
@@ -28,4 +31,4 @@ path = "../std_or_web"
 version = "0"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-reqwest = { version = "0.11.8", features = [ "blocking" ]}
+reqwest = { version = "0.11.8", features = [ "blocking","json" ]}

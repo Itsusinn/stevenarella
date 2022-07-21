@@ -915,6 +915,7 @@ state_packets!(
                 field position: u8 =,
                 field sender: UUID =,
             }
+            // 1.12.2
             packet ServerMessage_Position {
                 field message: format::Component =,
                 /// 0 - Chat message, 1 - System message, 2 - Action bar message
